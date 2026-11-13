@@ -79,6 +79,7 @@ Inside a session: `/model` to switch, `/models <words>` to search.
 | (file `openrouter.key`) | `OPENROUTER_API_KEY` | none | OpenRouter key |
 | (file `local.key`) | `CLAUDE_P_LOCAL_API_KEY` | none | API key for the local server, sent as `Authorization: Bearer` (e.g. llama-server `--api-key` on a remote GPU) |
 | `servers` | none | none | more self-hosted servers, see below |
+| `localCtx` | none | live probe | fallback context (tokens) for `local` when its `/props` probe fails |
 
 ### More self-hosted servers
 
@@ -91,6 +92,10 @@ Besides `local`, you can add named servers. Each one appears in `/model` as `via
 ```
 
 `keyFile` (default `<name>.key`, relative to this folder, gitignored) holds that server's API key. It is sent as `Authorization: Bearer` and only to that server. Names may only contain letters, digits, `-` and `_`.
+
+Add `"ctx"` (tokens) to a server, and `localCtx` for `local`, so claude-p sets the context window correctly even when the server isn't reachable at launch. Without it, an unreachable self-hosted server makes Claude Code assume a 1M window and overflow the real one.
+
+**Context limit and `/model`:** Claude Code reads the context window once, at launch, from `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. claude-p sets it from the launch model's server (live `/props`, else `ctx`). Switching with `/model` **mid-session does not change it**. So if you launch on a self-hosted model (e.g. 131k) and switch to a 1M OpenRouter model, you stay capped at 131k; switching the other way would overflow. To change the limit, relaunch with `--model <id>`. Switching among models with the same window (e.g. `local` and `vast`, both 131k) is always fine.
 
 Debug: set `CLAUDE_P_DEBUG=1` before starting the router to save the last `/v1/messages` request body to `last-request.json`. The router log is `router.log`.
 

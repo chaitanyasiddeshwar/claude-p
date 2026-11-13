@@ -85,7 +85,8 @@ try {
     $p = Invoke-RestMethod "$router/local/ctx?model=$([uri]::EscapeDataString($model))" -TimeoutSec 15
     $selfHosted = $true
     $ctx = [int]$p.n_ctx
-    Write-Host "Self-hosted model '$model': $($p.model), $ctx tokens context"
+    if ($p.live) { Write-Host "Self-hosted model '$model': $($p.model), $ctx tokens context" }
+    else { Write-Host "Self-hosted model '$model': server not reachable yet; using configured $ctx tokens context" }
 } catch {
     $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch {}
     if ($code -ne 404) {
@@ -99,6 +100,10 @@ if (-not $selfHosted -and (Test-Path $cache)) {
     $hit = (Get-Content $cache -Raw -Encoding utf8 | ConvertFrom-Json) | ForEach-Object { $_ } | Where-Object { $_.id -eq $model } | Select-Object -First 1
     if ($hit -and $hit.context_length) { $ctx = [int]$hit.context_length }
 }
+# A self-hosted server must never fall through to Claude Code's 1M default (it would overflow the real window).
+if ($selfHosted -and (-not $ctx)) { $ctx = 131072; Write-Warning "No context size for '$model'; defaulting to $ctx. Set `"ctx`" for it in config.json." }
+# Claude Code reads CLAUDE_CODE_MAX_CONTEXT_TOKENS once, now. Switching between a self-hosted model and a
+# larger-context OpenRouter model with /model mid-session does NOT update it; relaunch to change the limit.
 
 # ---- environment for this process only ----
 Remove-Item Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_MODEL, Env:ANTHROPIC_DEFAULT_OPUS_MODEL, Env:ANTHROPIC_DEFAULT_SONNET_MODEL, Env:CLAUDE_CODE_SUBAGENT_MODEL -ErrorAction SilentlyContinue

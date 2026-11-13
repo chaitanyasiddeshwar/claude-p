@@ -21,10 +21,11 @@ const PORT = Number(process.env.CLAUDE_P_ROUTER_PORT || CONFIG.routerPort || 809
 // Self-hosted model servers (claude-p never starts or stops them). "local" comes from localUrl + local.key;
 // more come from config.json:  "servers": { "vast": { "url": "https://llm.example.com", "keyFile": "vast.key" } }
 // Each one appears in /model as via-claude/<name>. Key files are secrets (gitignored *.key).
-function makeServer(name, url, keyFile, keyEnv) {
+function makeServer(name, url, keyFile, keyEnv, ctx) {
   const u = new URL(url);
   return {
     name, url: u, lib: u.protocol === 'https:' ? https : http, base: u.pathname.replace(/\/+$/, ''),
+    ctx: Number(ctx) || null,  // configured fallback context (tokens) used when the live /props probe fails
     key() {
       if (keyEnv && process.env[keyEnv]) return process.env[keyEnv].trim();
       try { return fs.readFileSync(path.resolve(DIR, keyFile), 'utf8').trim() || null; } catch { return null; }
@@ -32,10 +33,10 @@ function makeServer(name, url, keyFile, keyEnv) {
     where() { return this.url.origin + this.base; },
   };
 }
-const SERVERS = { local: makeServer('local', process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080', 'local.key', 'CLAUDE_P_LOCAL_API_KEY') };
+const SERVERS = { local: makeServer('local', process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080', 'local.key', 'CLAUDE_P_LOCAL_API_KEY', CONFIG.localCtx) };
 for (const [name, c] of Object.entries(CONFIG.servers || {})) {
   if (!/^[a-z0-9_-]+$/i.test(name) || !c || !c.url) continue; // names must not look like OpenRouter ids (no '/')
-  try { SERVERS[name] = makeServer(name, c.url, c.keyFile || `${name}.key`, null); } catch {}
+  try { SERVERS[name] = makeServer(name, c.url, c.keyFile || `${name}.key`, null, c.ctx); } catch {}
 }
 const serverFor = (m) => (Object.prototype.hasOwnProperty.call(SERVERS, m) ? SERVERS[m] : m.startsWith('local/') ? SERVERS.local : null); // local/* = ids from older claude-p versions
 const srvOpts = (srv, p, timeout) => {
@@ -291,9 +292,13 @@ const server = http.createServer(async (req, res) => {
       const srv = serverFor(m);
       if (!srv) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: `${m} is not a self-hosted server` })); return; }
       const p = await srvProps(srv);
-      const up = p || (await srvHealthy(srv));
-      res.writeHead(p ? 200 : 503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(p || { error: up ? `${srv.where()} is up but did not report a context size (not llama-server?)` : `nothing reachable at ${srv.where()}` }));
+      if (p) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ...p, live: true })); return; }
+      // Server not reachable or not llama-server: use the configured fallback so Claude Code still gets a real limit
+      // (never the 1M default). Mid-session /model switches can't re-read this, so the config value matters.
+      if (srv.ctx) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ n_ctx: srv.ctx, model: srv.name, live: false })); return; }
+      const up = await srvHealthy(srv);
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: up ? `${srv.where()} is up but did not report a context size; set "ctx" for this server in config.json` : `nothing reachable at ${srv.where()}; set "ctx" for this server in config.json so the context limit is still correct` }));
       return;
     }
     if (req.method === 'GET' && url === '/v1/models') {

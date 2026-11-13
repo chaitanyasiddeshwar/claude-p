@@ -1,7 +1,12 @@
 {
   "localUrl": "http://127.0.0.1:8080",
+  "localCtx": 131072,
   "routerPort": 8099,
   "servers": {
-    "vast": { "url": "https://llm.example.com", "keyFile": "vast.key" }
+    "vast": {
+      "url": "https://llm.example.com",
+      "keyFile": "vast.key",
+      "ctx": 131072
+    }
   }
 }
