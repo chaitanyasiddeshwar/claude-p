@@ -186,8 +186,14 @@ let sessions = 0;
 // thinking blocks closed with a non-empty signature (Claude Code drops unsigned thinking).
 const { Transform } = require('stream');
 const FAKE_SIG = 'claude-p-local';
+// Claude Code's TUI only renders a thinking block whose signature decodes as a valid Anthropic
+// "narration" envelope (fail-closed on anything else), which a self-hosted model can't produce.
+// So the thinking never shows inline. As a workaround we tee the live thinking text to a file the
+// user can watch in another terminal (see claude-p.ps1 --thinking / thinking.cmd). CLAUDE_P_NO_THINK_LOG disables it.
+const THINK_LOG = path.join(DIR, 'thinking.log');
+function thinkWrite(s) { if (process.env.CLAUDE_P_NO_THINK_LOG) return; try { fs.appendFileSync(THINK_LOG, s); } catch {} }
 class SseThinkingFixer extends Transform {
-  constructor() { super(); this.buf = ''; this.open = new Map(); this.done = new Set(); }
+  constructor() { super(); this.buf = ''; this.open = new Map(); this.done = new Set(); this.teed = false; }
   emit_(obj) { this.push(`event: ${obj.type}\ndata: ${JSON.stringify(obj)}\n\n`); }
   closeBlock(index) {
     const type = this.open.get(index);
@@ -204,10 +210,14 @@ class SseThinkingFixer extends Transform {
       case 'content_block_start':
         for (const i of [...this.open.keys()]) this.closeBlock(i);
         this.open.set(ev.index, ev.content_block && ev.content_block.type);
+        if (ev.content_block && ev.content_block.type === 'thinking') { thinkWrite(`\n${'─'.repeat(60)}\n[${new Date().toLocaleTimeString()}] thinking:\n`); this.teed = true; }
+        else if (ev.content_block && ev.content_block.type === 'text' && this.teed) thinkWrite('\n\n[answer]\n');
         this.emit_(ev); return;
       case 'content_block_delta':
         if (ev.delta && ev.delta.type === 'signature_delta') return; // we sign on close
         if (this.done.has(ev.index)) return; // late delta for a block we already closed
+        if (ev.delta && ev.delta.type === 'thinking_delta') thinkWrite(ev.delta.thinking || '');
+        else if (ev.delta && ev.delta.type === 'text_delta' && this.teed) thinkWrite(ev.delta.text || '');
         this.emit_(ev); return;
       case 'content_block_stop':
         if (this.open.has(ev.index)) this.closeBlock(ev.index);

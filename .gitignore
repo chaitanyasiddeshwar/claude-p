@@ -20,3 +20,4 @@ router.log
 *.log
 last-request.json
 node_modules/
+thinking.log

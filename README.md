@@ -6,7 +6,7 @@ Run **Claude Code** against **local models (llama.cpp)** and **any OpenRouter mo
 - Switch models inside Claude Code with **`/model`**. The picker lists the local model plus every OpenRouter model, with context size and price.
 - Search the long list with **`/models <words>`**, for example `/models deepseek` or `/models free`.
 - The local model is whatever server you run yourself (llama.cpp's `llama-server`, or anything else that speaks the Anthropic Messages API). claude-p only needs its URL.
-- Thinking from the local model shows up in Claude Code. The router rewrites llama-server's thinking stream into the shape Claude Code expects.
+- **Thinking** from self-hosted models can't render inline in Claude Code's TUI: it only displays thinking whose signature decodes as an Anthropic "narration" envelope (it fails closed on anything else), which a self-hosted model can't produce. The thinking is still used for context. To *see* it live, the router tees it to `thinking.log`; run `claude-p --thinking` (or `thinking.cmd`) in a second terminal to watch the model think in real time. Set `CLAUDE_P_NO_THINK_LOG=1` to disable the tee.
 
 Windows only for now (PowerShell + cmd).
 

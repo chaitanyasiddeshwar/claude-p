@@ -16,6 +16,7 @@
 - claude-p never starts or stops the local model server. The user runs it; config holds only its URL.
 - Windows-only: PowerShell 5.1 (no `??`, `?.`, `&&`).
 - Keep the router dependency-free (Node built-ins only).
+- Thinking display: verified against the 2.1.323 binary that Claude Code's TUI renders a thinking block only when its `signature` decodes as a valid Anthropic "narration" envelope (fail-closed; `o9()`/`IHn()`), so a self-hosted model's thinking never shows inline no matter how the SSE is shaped. The router tees live thinking text to `thinking.log` (watched via `claude-p --thinking`); don't waste effort trying to force inline display.
 
 ## Testing
 - `node --check router.js` and `node --check bin/models.js`.

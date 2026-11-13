@@ -12,6 +12,16 @@ $routerPort = if ($env:CLAUDE_P_ROUTER_PORT) { [int]$env:CLAUDE_P_ROUTER_PORT } 
 $router     = "http://127.0.0.1:$routerPort"
 $defaultModel = 'via-claude/local'
 
+# --thinking: self-hosted models' thinking can't render in Claude Code's TUI (it needs an Anthropic-signed
+# envelope). The router tees live thinking to thinking.log; this watches it. Run it in a second terminal.
+if ($args -contains '--thinking') {
+    $log = Join-Path $dir 'thinking.log'
+    if (-not (Test-Path $log)) { New-Item -ItemType File $log -Force | Out-Null }
+    Write-Host "Watching $log  (Ctrl+C to stop). Thinking appears here as the model streams it." -ForegroundColor Cyan
+    Get-Content -Path $log -Tail 20 -Wait
+    exit 0
+}
+
 $ClaudeArgs = @()
 foreach ($a in $args) {
     if ($a -eq '--refresh-models') { Remove-Item $cache -ErrorAction SilentlyContinue; Remove-Item (Join-Path $cfgDir 'cache\gateway-models.json') -ErrorAction SilentlyContinue }
