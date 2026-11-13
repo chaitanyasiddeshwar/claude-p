@@ -9,7 +9,7 @@
 - `install.ps1`: sets up a new machine (config.json, optional key, `claude-p.cmd` shim on PATH).
 
 ## Rules
-- **Never commit secrets.** `openrouter.key`, `config.json`, `config/` (has Claude OAuth `.credentials.json`, history, sessions), `models.json`, `*.log` and `last-request.json` are gitignored. Before every commit, run `git status` and check that the staged diff contains no keys (`git diff --cached | grep -iE 'sk-or-|api[_-]?key|bearer [a-z0-9]'`).
+- **Never commit secrets.** `openrouter.key`, `local.key`, `config.json`, `config/` (has Claude OAuth `.credentials.json`, history, sessions), `models.json`, `*.log` and `last-request.json` are gitignored. Before every commit, run `git status` and check that the staged diff contains no keys (`git diff --cached | grep -iE 'sk-or-|api[_-]?key|bearer [a-z0-9]'`).
 - No machine-specific paths in tracked files. Put them in `config.json`, an env var, or `$PSScriptRoot`/`__dirname`.
 - The live install is this checkout (usually `%USERPROFILE%\.claude-p`). Changes take effect on the next `claude-p` launch, because the router restarts when the last session exits.
 - claude-p never starts or stops the local model server. The user runs it; config holds only its URL.

@@ -21,10 +21,19 @@ const PORT = Number(process.env.CLAUDE_P_ROUTER_PORT || CONFIG.routerPort || 809
 const LOCAL_URL = new URL(process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080');
 const LOCAL_LIB = LOCAL_URL.protocol === 'https:' ? https : http;
 const LOCAL_BASE = LOCAL_URL.pathname.replace(/\/+$/, ''); // e.g. '' or '/llama'
-const localReqOpts = (p, timeout) => ({
-  protocol: LOCAL_URL.protocol, hostname: LOCAL_URL.hostname,
-  port: LOCAL_URL.port || (LOCAL_URL.protocol === 'https:' ? 443 : 80), path: LOCAL_BASE + p, timeout,
-});
+// Optional API key for the local server (e.g. llama-server --api-key on a remote GPU). Secret: local.key is gitignored.
+function localKey() {
+  if (process.env.CLAUDE_P_LOCAL_API_KEY) return process.env.CLAUDE_P_LOCAL_API_KEY.trim();
+  try { return fs.readFileSync(path.join(DIR, 'local.key'), 'utf8').trim() || null; } catch { return null; }
+}
+const localReqOpts = (p, timeout) => {
+  const key = localKey();
+  return {
+    protocol: LOCAL_URL.protocol, hostname: LOCAL_URL.hostname,
+    port: LOCAL_URL.port || (LOCAL_URL.protocol === 'https:' ? 443 : 80), path: LOCAL_BASE + p, timeout,
+    headers: key ? { authorization: `Bearer ${key}` } : {},
+  };
+};
 const CACHE = path.join(DIR, 'models.json');
 const KEY_FILE = path.join(DIR, 'openrouter.key');
 const LOG = path.join(DIR, 'router.log');
@@ -306,7 +315,7 @@ const server = http.createServer(async (req, res) => {
 
     if (isLocal(model)) {
       const o = localReqOpts(req.url);
-      forward(req, res, body, { protocol: o.protocol, host: o.hostname, port: o.port, path: o.path, fixThinking: true,
+      forward(req, res, body, { protocol: o.protocol, host: o.hostname, port: o.port, path: o.path, fixThinking: true, key: localKey(),
         hint: `Is your local model server running at ${LOCAL_URL.href}? (set localUrl in config.json)` });
     } else {
       const key = orKey();

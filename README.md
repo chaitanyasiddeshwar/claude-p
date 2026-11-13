@@ -77,6 +77,7 @@ Inside a session: `/model` to switch, `/models <words>` to search.
 | `localUrl` | `CLAUDE_P_LOCAL_URL` | `http://127.0.0.1:8080` | base URL of your local model server (http or https, optional path) |
 | `routerPort` | `CLAUDE_P_ROUTER_PORT` | 8099 | router port |
 | (file `openrouter.key`) | `OPENROUTER_API_KEY` | none | OpenRouter key |
+| (file `local.key`) | `CLAUDE_P_LOCAL_API_KEY` | none | API key for the local server, sent as `Authorization: Bearer` (e.g. llama-server `--api-key` on a remote GPU) |
 
 Debug: set `CLAUDE_P_DEBUG=1` before starting the router to save the last `/v1/messages` request body to `last-request.json`. The router log is `router.log`.
 
@@ -88,7 +89,7 @@ Run llama-server on a rented GPU (Vast.ai, RunPod, ...) and either tunnel it:
 ssh -p <port> root@<host> -L 8080:localhost:8080
 ```
 
-or set `localUrl` to its address. If you expose it to the internet, protect it with `--api-key`.
+or set `localUrl` to its public address (e.g. a Cloudflare Tunnel hostname). If you expose it to the internet, start llama-server with `--api-key` and put the same key in `local.key`.
 
 ## License
 
