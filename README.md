@@ -10,6 +10,8 @@ Run **Claude Code** against **local models (llama.cpp)** and **any OpenRouter mo
 
 Windows only for now (PowerShell + cmd).
 
+- A **status line** under the prompt shows context usage, e.g. `vast  ·  72k/131k ctx (55%)`. claude-p sets it in its own config on launch (only if you haven't set your own). It reads the window from `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so it matches the self-hosted server's real size.
+
 ## How it works
 
 ```

@@ -7,6 +7,7 @@
 - `claude-p.ps1`: entry point. It sets up `./config` (a separate CLAUDE_CONFIG_DIR), syncs `commands/models.md` into it, starts the router, reads the local context size (llama-server `/props`) when the model is local, sets the ANTHROPIC_* env vars, runs `claude`, and detaches from the router on exit.
 - `router.js`: Anthropic-compatible HTTP proxy on 127.0.0.1:8099. It routes by `model`: `local` goes to `localUrl`, names in config.json `servers` go to their URLs (each with its own key file), and everything else goes to OpenRouter. `/local/ctx?model=<id>` returns a server's context size, or 404 for OpenRouter models. It also serves `/v1/models` for the `/model` picker, hoists `role:"system"` messages, and rewrites llama-server's thinking SSE (`SseThinkingFixer`). It shuts down when the attach count drops to 0.
 - `bin/models.js` + `commands/models.md`: the `/models <filter>` slash command. `{{MODELS_JS}}` is filled in by claude-p.ps1.
+- `bin/statusline.js`: status line showing context usage; reads Claude Code's statusLine stdin JSON (`context_window.total_input_tokens`/`context_window_size`). claude-p.ps1 installs it into config/settings.json on launch unless the user set their own.
 - `install.ps1`: sets up a new machine (config.json, optional key, `claude-p.cmd` shim on PATH).
 
 ## Rules

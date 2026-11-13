@@ -61,6 +61,20 @@ if (-not $cmdIsJunction) {   # never write into the main ~/.claude/commands thro
     if (-not (Test-Path $dst) -or (Get-Content $dst -Raw) -ne $text) { [IO.File]::WriteAllText($dst, $text) }
 }
 
+# ---- status line: show context usage below the prompt (only if the user hasn't set their own) ----
+try {
+    $sobj = if (Test-Path $settings) { Get-Content $settings -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+    $slJs = (Join-Path $dir 'bin\statusline.js') -replace '\\', '/'
+    $wantCmd = "node `"$slJs`""
+    $cur = $sobj.PSObject.Properties['statusLine']
+    # Set it when absent, or refresh the one we installed before (command points at our statusline.js).
+    if (-not $cur -or ($cur.Value.type -eq 'command' -and "$($cur.Value.command)" -like '*statusline.js*' -and "$($cur.Value.command)" -ne $wantCmd)) {
+        $sl = [pscustomobject]@{ type = 'command'; command = $wantCmd; padding = 0 }
+        if ($cur) { $sobj.statusLine = $sl } else { $sobj | Add-Member -NotePropertyName statusLine -NotePropertyValue $sl }
+        $sobj | ConvertTo-Json -Depth 10 | Set-Content $settings -Encoding utf8
+    }
+} catch {}
+
 # ---- figure out the saved model (for the context-window hint) ----
 $model = $defaultModel
 try {
