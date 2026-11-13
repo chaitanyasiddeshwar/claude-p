@@ -21,11 +21,12 @@ const PORT = Number(process.env.CLAUDE_P_ROUTER_PORT || CONFIG.routerPort || 809
 // Self-hosted model servers (claude-p never starts or stops them). "local" comes from localUrl + local.key;
 // more come from config.json:  "servers": { "vast": { "url": "https://llm.example.com", "keyFile": "vast.key" } }
 // Each one appears in /model as via-claude/<name>. Key files are secrets (gitignored *.key).
-function makeServer(name, url, keyFile, keyEnv, ctx) {
+function makeServer(name, url, keyFile, keyEnv, ctx, vision) {
   const u = new URL(url);
   return {
     name, url: u, lib: u.protocol === 'https:' ? https : http, base: u.pathname.replace(/\/+$/, ''),
     ctx: Number(ctx) || null,  // configured fallback context (tokens) used when the live /props probe fails
+    vision: !!vision,  // true = a multimodal server; keep image/document blocks instead of stripping them
     key() {
       if (keyEnv && process.env[keyEnv]) return process.env[keyEnv].trim();
       try { return fs.readFileSync(path.resolve(DIR, keyFile), 'utf8').trim() || null; } catch { return null; }
@@ -36,7 +37,7 @@ function makeServer(name, url, keyFile, keyEnv, ctx) {
 const SERVERS = { local: makeServer('local', process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080', 'local.key', 'CLAUDE_P_LOCAL_API_KEY', CONFIG.localCtx) };
 for (const [name, c] of Object.entries(CONFIG.servers || {})) {
   if (!/^[a-z0-9_-]+$/i.test(name) || !c || !c.url) continue; // names must not look like OpenRouter ids (no '/')
-  try { SERVERS[name] = makeServer(name, c.url, c.keyFile || `${name}.key`, null, c.ctx); } catch {}
+  try { SERVERS[name] = makeServer(name, c.url, c.keyFile || `${name}.key`, null, c.ctx, c.vision); } catch {}
 }
 const serverFor = (m) => (Object.prototype.hasOwnProperty.call(SERVERS, m) ? SERVERS[m] : m.startsWith('local/') ? SERVERS.local : null); // local/* = ids from older claude-p versions
 const srvOpts = (srv, p, timeout) => {
@@ -174,6 +175,27 @@ function hoistSystemMessages(j) {
   }
   j.system = sys;
   j.messages = merged;
+}
+
+// Text-only self-hosted models (e.g. the Qwen coder) 500 on image/document content blocks
+// ("image input is not supported ... provide the mmproj"). There is no mmproj for a coder model,
+// so a single pasted screenshot or image-returning tool result would kill the whole request.
+// Replace such blocks with a text placeholder so the conversation continues (the model just can't
+// see the image). Opt a vision-capable server out with "vision": true in its config.json entry.
+function stripImages(j) {
+  let n = 0;
+  const clean = (content) => {
+    if (!Array.isArray(content)) return content;
+    return content.map((c) => {
+      if (c && (c.type === 'image' || c.type === 'document')) { n++; return { type: 'text', text: `[${c.type} omitted — this model is text-only and cannot view it]` }; }
+      // tool_result blocks can themselves carry image content
+      if (c && c.type === 'tool_result' && Array.isArray(c.content)) return { ...c, content: clean(c.content) };
+      return c;
+    });
+  };
+  if (Array.isArray(j.messages)) for (const m of j.messages) m.content = clean(m.content);
+  if (Array.isArray(j.system)) j.system = clean(j.system);
+  return n;
 }
 
 // ---------- proxy ----------
@@ -336,6 +358,8 @@ const server = http.createServer(async (req, res) => {
           else if (url === '/v1/messages') currentModel = model;
           j.model = model;
           if (!/^~?anthropic\//.test(model)) hoistSystemMessages(j);
+          const _srv = serverFor(model);
+          if (_srv && !_srv.vision) { const n = stripImages(j); if (n) log('stripped', n, 'image/document block(s) for text-only', model); }
           body = JSON.stringify(j);
         }
       } catch {}
