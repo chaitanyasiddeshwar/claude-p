@@ -1,5 +1,4 @@
 {
-  "localCommand": "C:\\llamacpp\\run-llama-server.bat",
-  "llamaPort": 8080,
+  "localUrl": "http://127.0.0.1:8080",
   "routerPort": 8099
 }

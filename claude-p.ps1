@@ -1,4 +1,4 @@
-# claude-p: Claude Code via a local router -> llama.cpp (via-claude/local) or OpenRouter (everything else).
+# claude-p: Claude Code via a local router -> your local model server (via-claude/local) or OpenRouter (everything else).
 # Uses the model you picked last time; switch with /model inside Claude Code.
 # Usage: claude-p [--refresh-models] [any claude args, e.g. --model via-claude/local]
 $ErrorActionPreference = 'Stop'
@@ -81,12 +81,15 @@ $null = Invoke-WebRequest "$router/attach" -Method Post -UseBasicParsing
 # ---- context window for the starting model ----
 $ctx = $null
 if ($isLocal) {
-    Write-Host 'Waiting for llama-server (starts it if needed)...'
     try {
-        $p = Invoke-RestMethod "$router/local/ctx" -TimeoutSec 660
+        $p = Invoke-RestMethod "$router/local/ctx" -TimeoutSec 10
         $ctx = [int]$p.n_ctx
-        Write-Host "llama-server ready: $($p.model), $ctx tokens context"
-    } catch { Write-Warning "Could not read llama-server context size: $_" }
+        Write-Host "Local model: $($p.model), $ctx tokens context"
+    } catch {
+        $msg = $_.ErrorDetails.Message
+        try { $msg = ($msg | ConvertFrom-Json).error } catch {}
+        Write-Warning "Local model: $(if ($msg) { $msg } else { $_ }). Start your local server, or switch with /model."
+    }
 } elseif (Test-Path $cache) {
     $hit = (Get-Content $cache -Raw -Encoding utf8 | ConvertFrom-Json) | ForEach-Object { $_ } | Where-Object { $_.id -eq $model } | Select-Object -First 1
     if ($hit -and $hit.context_length) { $ctx = [int]$hit.context_length }

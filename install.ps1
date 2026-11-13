@@ -1,9 +1,8 @@
 # claude-p installer (Windows). Run from the cloned repo:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-LocalCommand C:\path\to\run-llama-server.bat] [-BinDir <dir on PATH>]
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-LocalUrl http://127.0.0.1:8080] [-BinDir <dir on PATH>]
 # Safe to re-run: it never overwrites an existing config.json or openrouter.key.
 param(
-    [string]$LocalCommand,
-    [int]$LlamaPort = 8080,
+    [string]$LocalUrl,
     [string]$BinDir = (Join-Path $env:USERPROFILE '.local\bin')
 )
 $ErrorActionPreference = 'Stop'
@@ -19,10 +18,11 @@ foreach ($exe in 'node', 'claude') {
 # ---- config.json (machine-specific, gitignored) ----
 $cfgPath = Join-Path $repo 'config.json'
 if (-not (Test-Path $cfgPath)) {
-    if (-not $LocalCommand) {
-        $LocalCommand = Read-Host 'Path to the .bat/.cmd that starts llama-server (Enter to skip; local model then only works if llama-server is already running)'
+    if (-not $LocalUrl) {
+        $LocalUrl = Read-Host 'URL of your local model server (Enter for http://127.0.0.1:8080)'
+        if (-not $LocalUrl) { $LocalUrl = 'http://127.0.0.1:8080' }
     }
-    $cfg = [ordered]@{ localCommand = $(if ($LocalCommand) { $LocalCommand } else { $null }); llamaPort = $LlamaPort; routerPort = 8099 }
+    $cfg = [ordered]@{ localUrl = $LocalUrl.TrimEnd('/'); routerPort = 8099 }
     [IO.File]::WriteAllText($cfgPath, ($cfg | ConvertTo-Json))
     Write-Host "Wrote $cfgPath"
 } else { Write-Host "Keeping existing $cfgPath" }

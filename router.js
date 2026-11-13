@@ -1,5 +1,5 @@
 // claude-p router: one Anthropic-compatible endpoint that routes by model name.
-//   local    -> llama-server on 127.0.0.1:<llamaPort> (uses a running one, else runs config.json's localCommand)
+//   local    -> your own Anthropic-compatible server (e.g. llama-server) at config.json's localUrl
 //   other    -> https://openrouter.ai/api (Anthropic-compatible) with your OpenRouter key
 //   current  -> whatever model the main loop used last (used for Claude Code's background "haiku" calls)
 // GET /v1/models lists local + all OpenRouter models so Claude Code's /model picker can show them.
@@ -8,7 +8,6 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFile } = require('child_process');
 
 const DIR = __dirname;
 
@@ -18,15 +17,21 @@ let CONFIG = {};
 try { CONFIG = JSON.parse(fs.readFileSync(path.join(DIR, 'config.json'), 'utf8').replace(/^\uFEFF/, '')); } catch {}
 
 const PORT = Number(process.env.CLAUDE_P_ROUTER_PORT || CONFIG.routerPort || 8099);
-const LLAMA_PORT = Number(process.env.CLAUDE_P_LLAMA_PORT || CONFIG.llamaPort || 8080);
+// Where the local model is served. claude-p never starts or stops it; run it however you like.
+const LOCAL_URL = new URL(process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080');
+const LOCAL_LIB = LOCAL_URL.protocol === 'https:' ? https : http;
+const LOCAL_BASE = LOCAL_URL.pathname.replace(/\/+$/, ''); // e.g. '' or '/llama'
+const localReqOpts = (p, timeout) => ({
+  protocol: LOCAL_URL.protocol, hostname: LOCAL_URL.hostname,
+  port: LOCAL_URL.port || (LOCAL_URL.protocol === 'https:' ? 443 : 80), path: LOCAL_BASE + p, timeout,
+});
 const CACHE = path.join(DIR, 'models.json');
 const KEY_FILE = path.join(DIR, 'openrouter.key');
 const LOG = path.join(DIR, 'router.log');
 const PREFIX = 'via-claude/';
 
-// One local model. Whatever llama-server is on LLAMA_PORT serves it; if none is running we run LOCAL_BAT.
+// One local model: whatever is served at LOCAL_URL.
 const LOCAL_ID = 'local';
-const LOCAL_BAT = process.env.CLAUDE_P_LOCAL_BAT || CONFIG.localCommand || null;
 const isLocal = (m) => m === LOCAL_ID || m.startsWith('local/'); // local/* = ids from older claude-p versions
 
 function log(...a) {
@@ -84,9 +89,8 @@ async function modelsResponse() {
   const p = await llamaProps();
   const data = [{
     type: 'model', id: pub(LOCAL_ID), created_at: '2026-01-01T00:00:00Z',
-    display_name: p ? `LOCAL ${p.model} · ${Math.round(p.n_ctx / 1024)}k ctx · free` : 'LOCAL llama.cpp · free',
-    description: p ? `llama-server on :${LLAMA_PORT}, ${p.n_ctx} tokens context`
-      : LOCAL_BAT ? `not running; selecting it starts ${path.basename(LOCAL_BAT)}` : `not running on :${LLAMA_PORT}; no localCommand configured`,
+    display_name: p ? `LOCAL ${p.model} · ${Math.round(p.n_ctx / 1024)}k ctx · free` : 'LOCAL model · free',
+    description: p ? `${LOCAL_URL.origin}${LOCAL_BASE}, ${p.n_ctx} tokens context` : `not reachable at ${LOCAL_URL.origin}${LOCAL_BASE}; start your local server`,
   }];
   for (const m of await openRouterModels()) {
     const price = fmtPrice(m);
@@ -100,65 +104,30 @@ async function modelsResponse() {
   return { data, has_more: false, first_id: data[0] && data[0].id, last_id: data.length ? data[data.length - 1].id : null };
 }
 
-// ---------- llama-server lifecycle ----------
-let llama = null; // { id, proc } when started by us
-let llamaStarting = null;
-
-function llamaHealthy() {
-  return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port: LLAMA_PORT, path: '/health', timeout: 2000 }, (res) => {
-      res.resume(); resolve(res.statusCode === 200);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-  });
+// ---------- local server (run by the user; we only talk to it) ----------
+function localGet(p, timeout, onRes, onFail) {
+  const req = LOCAL_LIB.get(localReqOpts(p, timeout), onRes);
+  req.on('error', onFail);
+  req.on('timeout', () => { req.destroy(); onFail(); });
 }
 
-// { model, n_ctx } from llama-server's /props, or null when it isn't up.
+function localHealthy() {
+  return new Promise((resolve) => localGet('/health', 2000, (res) => { res.resume(); resolve(res.statusCode === 200); }, () => resolve(false)));
+}
+
+// { model, n_ctx } from llama-server's /props, or null when unavailable (not running, or not llama-server).
 function llamaProps() {
-  return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port: LLAMA_PORT, path: '/props', timeout: 3000 }, (res) => {
-      let d = '';
-      res.on('data', (c) => (d += c));
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(d);
-          const n_ctx = j.default_generation_settings && j.default_generation_settings.n_ctx;
-          resolve(n_ctx ? { n_ctx, model: path.basename(String(j.model_path || 'model')).replace(/\.gguf$/i, '') } : null);
-        } catch { resolve(null); }
-      });
+  return new Promise((resolve) => localGet('/props', 3000, (res) => {
+    let d = '';
+    res.on('data', (c) => (d += c));
+    res.on('end', () => {
+      try {
+        const j = JSON.parse(d);
+        const n_ctx = j.default_generation_settings && j.default_generation_settings.n_ctx;
+        resolve(n_ctx ? { n_ctx, model: path.basename(String(j.model_path || 'model')).replace(/\.gguf$/i, '') } : null);
+      } catch { resolve(null); }
     });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-  });
-}
-
-function killLlama() {
-  if (!llama) return Promise.resolve();
-  const pid = llama.proc.pid;
-  log('stopping llama-server tree', pid);
-  llama = null;
-  return new Promise((r) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => r()));
-}
-
-async function ensureLlama() {
-  if (llamaStarting) await llamaStarting.catch(() => {});
-  if (await llamaHealthy()) return;
-  llamaStarting = (async () => {
-    const bat = LOCAL_BAT;
-    if (!bat) throw new Error(`No llama-server on :${LLAMA_PORT} and no localCommand set in ${path.join(DIR, 'config.json')}`);
-    log('starting', bat);
-    const proc = spawn('cmd.exe', ['/c', bat], { cwd: path.dirname(bat), detached: false, windowsHide: true, stdio: 'ignore' });
-    llama = { proc };
-    proc.on('exit', () => { if (llama && llama.proc === proc) llama = null; });
-    for (let i = 0; i < 300; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      if (await llamaHealthy()) { log('llama-server ready'); return; }
-      if (!llama) throw new Error('llama-server exited during startup');
-    }
-    throw new Error('llama-server not ready after 10 minutes');
-  })();
-  try { await llamaStarting; } finally { llamaStarting = null; }
+  }, () => resolve(null)));
 }
 
 // Claude Code sends role:"system" entries inside messages[]. Many chat templates (e.g. Qwen's)
@@ -271,7 +240,7 @@ function forward(req, res, body, target) {
       ur.pipe(res);
     }
   });
-  up.on('error', (e) => sendErr(res, 502, `upstream error: ${e.message}`));
+  up.on('error', (e) => sendErr(res, 502, `upstream error (${target.host}:${target.port}): ${e.message}${target.hint ? '. ' + target.hint : ''}`));
   res.on('close', () => up.destroy());
   up.end(body);
 }
@@ -294,12 +263,12 @@ const server = http.createServer(async (req, res) => {
       if (sessions === 0) await shutdown();
       return;
     }
-    // Used by claude-p.ps1 at launch: make sure llama-server is up and report its context size.
+    // Used by claude-p.ps1 at launch: report the local server's context size (llama-server /props).
     if (req.method === 'GET' && url === '/local/ctx') {
-      await ensureLlama();
       const p = await llamaProps();
+      const up = p || (await localHealthy());
       res.writeHead(p ? 200 : 503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(p || { error: 'llama-server did not report n_ctx' }));
+      res.end(JSON.stringify(p || { error: up ? `${LOCAL_URL.href} is up but did not report a context size (not llama-server?)` : `nothing reachable at ${LOCAL_URL.href}` }));
       return;
     }
     if (req.method === 'GET' && url === '/v1/models') {
@@ -336,8 +305,9 @@ const server = http.createServer(async (req, res) => {
     if (process.env.CLAUDE_P_DEBUG && url === '/v1/messages') { try { fs.writeFileSync(path.join(DIR, 'last-request.json'), body); } catch {} }
 
     if (isLocal(model)) {
-      await ensureLlama();
-      forward(req, res, body, { protocol: 'http:', host: '127.0.0.1', port: LLAMA_PORT, path: req.url, fixThinking: true });
+      const o = localReqOpts(req.url);
+      forward(req, res, body, { protocol: o.protocol, host: o.hostname, port: o.port, path: o.path, fixThinking: true,
+        hint: `Is your local model server running at ${LOCAL_URL.href}? (set localUrl in config.json)` });
     } else {
       const key = orKey();
       if (!key) return sendErr(res, 401, `No OpenRouter key. Put it in ${KEY_FILE} or set OPENROUTER_API_KEY.`);
@@ -350,7 +320,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function shutdown() {
-  await killLlama();
   server.close();
   process.exit(0);
 }
