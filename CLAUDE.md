@@ -4,12 +4,12 @@
 
 ## Layout
 - `claude-p.ps1`: entry point. It sets up `./config` (a separate CLAUDE_CONFIG_DIR), syncs `commands/models.md` into it, starts the router, reads the local context size (llama-server `/props`) when the model is local, sets the ANTHROPIC_* env vars, runs `claude`, and detaches from the router on exit.
-- `router.js`: Anthropic-compatible HTTP proxy on 127.0.0.1:8099. It routes by `model`: `local` goes to `localUrl`, everything else to OpenRouter. It also serves `/v1/models` for the `/model` picker, hoists `role:"system"` messages, and rewrites llama-server's thinking SSE (`SseThinkingFixer`). It shuts down when the attach count drops to 0.
+- `router.js`: Anthropic-compatible HTTP proxy on 127.0.0.1:8099. It routes by `model`: `local` goes to `localUrl`, names in config.json `servers` go to their URLs (each with its own key file), and everything else goes to OpenRouter. `/local/ctx?model=<id>` returns a server's context size, or 404 for OpenRouter models. It also serves `/v1/models` for the `/model` picker, hoists `role:"system"` messages, and rewrites llama-server's thinking SSE (`SseThinkingFixer`). It shuts down when the attach count drops to 0.
 - `bin/models.js` + `commands/models.md`: the `/models <filter>` slash command. `{{MODELS_JS}}` is filled in by claude-p.ps1.
 - `install.ps1`: sets up a new machine (config.json, optional key, `claude-p.cmd` shim on PATH).
 
 ## Rules
-- **Never commit secrets.** `openrouter.key`, `local.key`, `config.json`, `config/` (has Claude OAuth `.credentials.json`, history, sessions), `models.json`, `*.log` and `last-request.json` are gitignored. Before every commit, run `git status` and check that the staged diff contains no keys (`git diff --cached | grep -iE 'sk-or-|api[_-]?key|bearer [a-z0-9]'`).
+- **Never commit secrets.** `openrouter.key`, `local.key`, any `*.key` server key, `config.json`, `config/` (has Claude OAuth `.credentials.json`, history, sessions), `models.json`, `*.log` and `last-request.json` are gitignored. Before every commit, run `git status` and check that the staged diff contains no keys (`git diff --cached | grep -iE 'sk-or-|api[_-]?key|bearer [a-z0-9]'`).
 - No machine-specific paths in tracked files. Put them in `config.json`, an env var, or `$PSScriptRoot`/`__dirname`.
 - The live install is this checkout (usually `%USERPROFILE%\.claude-p`). Changes take effect on the next `claude-p` launch, because the router restarts when the last session exits.
 - claude-p never starts or stops the local model server. The user runs it; config holds only its URL.

@@ -78,6 +78,19 @@ Inside a session: `/model` to switch, `/models <words>` to search.
 | `routerPort` | `CLAUDE_P_ROUTER_PORT` | 8099 | router port |
 | (file `openrouter.key`) | `OPENROUTER_API_KEY` | none | OpenRouter key |
 | (file `local.key`) | `CLAUDE_P_LOCAL_API_KEY` | none | API key for the local server, sent as `Authorization: Bearer` (e.g. llama-server `--api-key` on a remote GPU) |
+| `servers` | none | none | more self-hosted servers, see below |
+
+### More self-hosted servers
+
+Besides `local`, you can add named servers. Each one appears in `/model` as `via-claude/<name>`:
+
+```json
+"servers": {
+  "vast": { "url": "https://llm.example.com", "keyFile": "vast.key" }
+}
+```
+
+`keyFile` (default `<name>.key`, relative to this folder, gitignored) holds that server's API key. It is sent as `Authorization: Bearer` and only to that server. Names may only contain letters, digits, `-` and `_`.
 
 Debug: set `CLAUDE_P_DEBUG=1` before starting the router to save the last `/v1/messages` request body to `last-request.json`. The router log is `router.log`.
 

@@ -1,5 +1,6 @@
 // claude-p router: one Anthropic-compatible endpoint that routes by model name.
 //   local    -> your own Anthropic-compatible server (e.g. llama-server) at config.json's localUrl
+//   <name>   -> more self-hosted servers from config.json "servers" (e.g. a rented GPU)
 //   other    -> https://openrouter.ai/api (Anthropic-compatible) with your OpenRouter key
 //   current  -> whatever model the main loop used last (used for Claude Code's background "haiku" calls)
 // GET /v1/models lists local + all OpenRouter models so Claude Code's /model picker can show them.
@@ -17,20 +18,31 @@ let CONFIG = {};
 try { CONFIG = JSON.parse(fs.readFileSync(path.join(DIR, 'config.json'), 'utf8').replace(/^\uFEFF/, '')); } catch {}
 
 const PORT = Number(process.env.CLAUDE_P_ROUTER_PORT || CONFIG.routerPort || 8099);
-// Where the local model is served. claude-p never starts or stops it; run it however you like.
-const LOCAL_URL = new URL(process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080');
-const LOCAL_LIB = LOCAL_URL.protocol === 'https:' ? https : http;
-const LOCAL_BASE = LOCAL_URL.pathname.replace(/\/+$/, ''); // e.g. '' or '/llama'
-// Optional API key for the local server (e.g. llama-server --api-key on a remote GPU). Secret: local.key is gitignored.
-function localKey() {
-  if (process.env.CLAUDE_P_LOCAL_API_KEY) return process.env.CLAUDE_P_LOCAL_API_KEY.trim();
-  try { return fs.readFileSync(path.join(DIR, 'local.key'), 'utf8').trim() || null; } catch { return null; }
-}
-const localReqOpts = (p, timeout) => {
-  const key = localKey();
+// Self-hosted model servers (claude-p never starts or stops them). "local" comes from localUrl + local.key;
+// more come from config.json:  "servers": { "vast": { "url": "https://llm.example.com", "keyFile": "vast.key" } }
+// Each one appears in /model as via-claude/<name>. Key files are secrets (gitignored *.key).
+function makeServer(name, url, keyFile, keyEnv) {
+  const u = new URL(url);
   return {
-    protocol: LOCAL_URL.protocol, hostname: LOCAL_URL.hostname,
-    port: LOCAL_URL.port || (LOCAL_URL.protocol === 'https:' ? 443 : 80), path: LOCAL_BASE + p, timeout,
+    name, url: u, lib: u.protocol === 'https:' ? https : http, base: u.pathname.replace(/\/+$/, ''),
+    key() {
+      if (keyEnv && process.env[keyEnv]) return process.env[keyEnv].trim();
+      try { return fs.readFileSync(path.resolve(DIR, keyFile), 'utf8').trim() || null; } catch { return null; }
+    },
+    where() { return this.url.origin + this.base; },
+  };
+}
+const SERVERS = { local: makeServer('local', process.env.CLAUDE_P_LOCAL_URL || CONFIG.localUrl || 'http://127.0.0.1:8080', 'local.key', 'CLAUDE_P_LOCAL_API_KEY') };
+for (const [name, c] of Object.entries(CONFIG.servers || {})) {
+  if (!/^[a-z0-9_-]+$/i.test(name) || !c || !c.url) continue; // names must not look like OpenRouter ids (no '/')
+  try { SERVERS[name] = makeServer(name, c.url, c.keyFile || `${name}.key`, null); } catch {}
+}
+const serverFor = (m) => (Object.prototype.hasOwnProperty.call(SERVERS, m) ? SERVERS[m] : m.startsWith('local/') ? SERVERS.local : null); // local/* = ids from older claude-p versions
+const srvOpts = (srv, p, timeout) => {
+  const key = srv.key();
+  return {
+    protocol: srv.url.protocol, hostname: srv.url.hostname,
+    port: srv.url.port || (srv.url.protocol === 'https:' ? 443 : 80), path: srv.base + p, timeout,
     headers: key ? { authorization: `Bearer ${key}` } : {},
   };
 };
@@ -38,10 +50,6 @@ const CACHE = path.join(DIR, 'models.json');
 const KEY_FILE = path.join(DIR, 'openrouter.key');
 const LOG = path.join(DIR, 'router.log');
 const PREFIX = 'via-claude/';
-
-// One local model: whatever is served at LOCAL_URL.
-const LOCAL_ID = 'local';
-const isLocal = (m) => m === LOCAL_ID || m.startsWith('local/'); // local/* = ids from older claude-p versions
 
 function log(...a) {
   try { fs.appendFileSync(LOG, `[${new Date().toISOString()}] ${a.join(' ')}\n`); } catch {}
@@ -95,12 +103,16 @@ function fmtPrice(m) {
 async function modelsResponse() {
   // Claude Code's discovery keeps only ids matching /(claude|anthropic)/i, so prefix the others.
   const pub = (id) => (/(claude|anthropic)/i.test(id) ? id : PREFIX + id);
-  const p = await llamaProps();
-  const data = [{
-    type: 'model', id: pub(LOCAL_ID), created_at: '2026-01-01T00:00:00Z',
-    display_name: p ? `LOCAL ${p.model} · ${Math.round(p.n_ctx / 1024)}k ctx · free` : 'LOCAL model · free',
-    description: p ? `${LOCAL_URL.origin}${LOCAL_BASE}, ${p.n_ctx} tokens context` : `not reachable at ${LOCAL_URL.origin}${LOCAL_BASE}; start your local server`,
-  }];
+  const data = [];
+  const props = await Promise.all(Object.values(SERVERS).map((srv) => srvProps(srv)));
+  Object.values(SERVERS).forEach((srv, i) => {
+    const p = props[i], label = srv.name.toUpperCase();
+    data.push({
+      type: 'model', id: pub(srv.name), created_at: '2026-01-01T00:00:00Z',
+      display_name: p ? `${label} ${p.model} · ${Math.round(p.n_ctx / 1024)}k ctx · self-hosted` : `${label} model · self-hosted`,
+      description: p ? `${srv.where()}, ${p.n_ctx} tokens context` : `not reachable at ${srv.where()}; start that server`,
+    });
+  });
   for (const m of await openRouterModels()) {
     const price = fmtPrice(m);
     const ctx = m.context_length ? `${Math.round(m.context_length / 1000)}k ctx` : '';
@@ -113,20 +125,20 @@ async function modelsResponse() {
   return { data, has_more: false, first_id: data[0] && data[0].id, last_id: data.length ? data[data.length - 1].id : null };
 }
 
-// ---------- local server (run by the user; we only talk to it) ----------
-function localGet(p, timeout, onRes, onFail) {
-  const req = LOCAL_LIB.get(localReqOpts(p, timeout), onRes);
+// ---------- self-hosted servers (run by the user; we only talk to them) ----------
+function srvGet(srv, p, timeout, onRes, onFail) {
+  const req = srv.lib.get(srvOpts(srv, p, timeout), onRes);
   req.on('error', onFail);
   req.on('timeout', () => { req.destroy(); onFail(); });
 }
 
-function localHealthy() {
-  return new Promise((resolve) => localGet('/health', 2000, (res) => { res.resume(); resolve(res.statusCode === 200); }, () => resolve(false)));
+function srvHealthy(srv) {
+  return new Promise((resolve) => srvGet(srv, '/health', 3000, (res) => { res.resume(); resolve(res.statusCode === 200); }, () => resolve(false)));
 }
 
 // { model, n_ctx } from llama-server's /props, or null when unavailable (not running, or not llama-server).
-function llamaProps() {
-  return new Promise((resolve) => localGet('/props', 3000, (res) => {
+function srvProps(srv) {
+  return new Promise((resolve) => srvGet(srv, '/props', 5000, (res) => {
     let d = '';
     res.on('data', (c) => (d += c));
     res.on('end', () => {
@@ -272,12 +284,16 @@ const server = http.createServer(async (req, res) => {
       if (sessions === 0) await shutdown();
       return;
     }
-    // Used by claude-p.ps1 at launch: report the local server's context size (llama-server /props).
+    // Used by claude-p.ps1 at launch: context size of a self-hosted server (llama-server /props).
+    // 404 means the model isn't a self-hosted server (so it's an OpenRouter model).
     if (req.method === 'GET' && url === '/local/ctx') {
-      const p = await llamaProps();
-      const up = p || (await localHealthy());
+      const m = (new URLSearchParams(req.url.split('?')[1] || '').get('model') || 'local').replace(/\[1m\]$/i, '').replace(/^(via-claude|claude-p)\//, '');
+      const srv = serverFor(m);
+      if (!srv) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: `${m} is not a self-hosted server` })); return; }
+      const p = await srvProps(srv);
+      const up = p || (await srvHealthy(srv));
       res.writeHead(p ? 200 : 503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(p || { error: up ? `${LOCAL_URL.href} is up but did not report a context size (not llama-server?)` : `nothing reachable at ${LOCAL_URL.href}` }));
+      res.end(JSON.stringify(p || { error: up ? `${srv.where()} is up but did not report a context size (not llama-server?)` : `nothing reachable at ${srv.where()}` }));
       return;
     }
     if (req.method === 'GET' && url === '/v1/models') {
@@ -313,10 +329,11 @@ const server = http.createServer(async (req, res) => {
     log(req.method, url, '->', model);
     if (process.env.CLAUDE_P_DEBUG && url === '/v1/messages') { try { fs.writeFileSync(path.join(DIR, 'last-request.json'), body); } catch {} }
 
-    if (isLocal(model)) {
-      const o = localReqOpts(req.url);
-      forward(req, res, body, { protocol: o.protocol, host: o.hostname, port: o.port, path: o.path, fixThinking: true, key: localKey(),
-        hint: `Is your local model server running at ${LOCAL_URL.href}? (set localUrl in config.json)` });
+    const srv = serverFor(model);
+    if (srv) {
+      const o = srvOpts(srv, req.url);
+      forward(req, res, body, { protocol: o.protocol, host: o.hostname, port: o.port, path: o.path, fixThinking: true, key: srv.key(),
+        hint: `Is the "${srv.name}" server running at ${srv.where()}? (see config.json)` });
     } else {
       const key = orKey();
       if (!key) return sendErr(res, 401, `No OpenRouter key. Put it in ${KEY_FILE} or set OPENROUTER_API_KEY.`);

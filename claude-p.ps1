@@ -66,7 +66,6 @@ try {
 } catch {}
 for ($i = 0; $i -lt $ClaudeArgs.Count - 1; $i++) { if ($ClaudeArgs[$i] -eq '--model') { $model = $ClaudeArgs[$i + 1] } }
 $model = $model -replace '\[1m\]$', '' -replace '^(via-claude|claude-p)/', ''
-$isLocal = $model -eq 'local' -or $model -like 'local/*'
 
 # ---- start the router if needed ----
 function Test-Router { try { (Invoke-WebRequest "$router/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch { $false } }
@@ -79,18 +78,24 @@ if (-not (Test-Router)) {
 $null = Invoke-WebRequest "$router/attach" -Method Post -UseBasicParsing
 
 # ---- context window for the starting model ----
+# Ask the router first: it answers for self-hosted servers (local, vast, ...) and says 404 for OpenRouter models.
 $ctx = $null
-if ($isLocal) {
-    try {
-        $p = Invoke-RestMethod "$router/local/ctx" -TimeoutSec 10
-        $ctx = [int]$p.n_ctx
-        Write-Host "Local model: $($p.model), $ctx tokens context"
-    } catch {
+$selfHosted = $false
+try {
+    $p = Invoke-RestMethod "$router/local/ctx?model=$([uri]::EscapeDataString($model))" -TimeoutSec 15
+    $selfHosted = $true
+    $ctx = [int]$p.n_ctx
+    Write-Host "Self-hosted model '$model': $($p.model), $ctx tokens context"
+} catch {
+    $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($code -ne 404) {
+        $selfHosted = $true
         $msg = $_.ErrorDetails.Message
         try { $msg = ($msg | ConvertFrom-Json).error } catch {}
-        Write-Warning "Local model: $(if ($msg) { $msg } else { $_ }). Start your local server, or switch with /model."
+        Write-Warning "Model '$model': $(if ($msg) { $msg } else { $_ }). Start that server, or switch with /model."
     }
-} elseif (Test-Path $cache) {
+}
+if (-not $selfHosted -and (Test-Path $cache)) {
     $hit = (Get-Content $cache -Raw -Encoding utf8 | ConvertFrom-Json) | ForEach-Object { $_ } | Where-Object { $_.id -eq $model } | Select-Object -First 1
     if ($hit -and $hit.context_length) { $ctx = [int]$hit.context_length }
 }

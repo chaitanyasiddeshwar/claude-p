@@ -12,8 +12,13 @@ function fmtPrice(m) {
   return `${f(m.prompt)}/${f(m.completion)}`;
 }
 
+// Self-hosted servers: "local" plus config.json "servers" (see router.js).
+let cfg = {};
+try { cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8').replace(/^﻿/, '')); } catch {}
 const rows = [
-  { id: 'local', context_length: null, name: 'LOCAL llama.cpp (context size read from llama-server)', prompt: 0, completion: 0 },
+  { id: 'local', context_length: null, name: `LOCAL self-hosted (${cfg.localUrl || 'http://127.0.0.1:8080'})`, prompt: null, completion: null },
+  ...Object.entries(cfg.servers || {}).filter(([n, s]) => /^[a-z0-9_-]+$/i.test(n) && s && s.url)
+    .map(([n, s]) => ({ id: n, context_length: null, name: `${n.toUpperCase()} self-hosted (${s.url})`, prompt: null, completion: null })),
 ];
 try {
   let l = JSON.parse(fs.readFileSync(path.join(dir, 'models.json'), 'utf8').replace(/^\uFEFF/, ''));
