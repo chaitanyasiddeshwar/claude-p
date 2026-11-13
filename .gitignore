@@ -1,0 +1,22 @@
+# ---- Secrets / credentials: never commit ----
+openrouter.key
+*.key
+*.pem
+.env
+.env.*
+*credentials*
+*secret*
+*token*
+
+# ---- Machine-specific settings (copy config.example.json -> config.json) ----
+config.json
+
+# ---- Claude Code config dir used by claude-p (sessions, history, OAuth credentials) ----
+config/
+
+# ---- Runtime caches, logs, debug dumps ----
+models.json
+router.log
+*.log
+last-request.json
+node_modules/
