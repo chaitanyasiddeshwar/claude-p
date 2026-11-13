@@ -99,7 +99,21 @@ Add `"ctx"` (tokens) to a server, and `localCtx` for `local`, so claude-p sets t
 
 **Context limit and `/model`:** Claude Code reads the context window once, at launch, from `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. claude-p sets it from the launch model's server (live `/props`, else `ctx`). Switching with `/model` **mid-session does not change it**. So if you launch on a self-hosted model (e.g. 131k) and switch to a 1M OpenRouter model, you stay capped at 131k; switching the other way would overflow. To change the limit, relaunch with `--model <id>`. Switching among models with the same window (e.g. `local` and `vast`, both 131k) is always fine.
 
+**Images with a text-only model:** `WebSearch`/`WebFetch` and image input assume Anthropic's server-side tools, which don't exist behind a non-Anthropic backend. If a message carries an image (a pasted screenshot, an image-returning tool) the router strips `image`/`document` blocks before forwarding to a self-hosted server and replaces them with a text placeholder, so a text-only model (e.g. a coder model with no `mmproj`) doesn't 500. If a server *is* multimodal, add `"vision": true` to its entry to keep images intact.
+
 Debug: set `CLAUDE_P_DEBUG=1` before starting the router to save the last `/v1/messages` request body to `last-request.json`. The router log is `router.log`.
+
+## Web search
+
+`WebSearch`/`WebFetch` are Anthropic **server-side** tools; Claude Code drops them when pointed at a non-Anthropic backend, so self-hosted and OpenRouter models get no search. Give them one with an MCP search server, which is backend-agnostic. Example (DuckDuckGo, no API key; needs [`uv`](https://docs.astral.sh/uv/)):
+
+```
+# writes to claude-p's own config dir, not your main `claude`
+set CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude-p\config    # PowerShell: $env:CLAUDE_CONFIG_DIR=...
+claude mcp add ddg-search --scope user -- uvx duckduckgo-mcp-server
+```
+
+The model then has `search` / `fetch_content` tools it can call. (For OpenRouter models only, you can instead append `:online` to the model id to use OpenRouter's own server-side search.)
 
 ## Using a cloud GPU as "local"
 
