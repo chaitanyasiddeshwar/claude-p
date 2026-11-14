@@ -115,6 +115,24 @@ claude mcp add ddg-search --scope user -- uvx duckduckgo-mcp-server
 
 The model then has `search` / `fetch_content` tools it can call. (For OpenRouter models only, you can instead append `:online` to the model id to use OpenRouter's own server-side search.)
 
+## Plugins only in claude-p (example: rea for reverse engineering)
+
+claude-p's `config\plugins` is a junction to `~\.claude\plugins`, so plugin *files* are shared, but whether a plugin is *enabled* is per profile (`enabledPlugins` in each `settings.json`). Install with `CLAUDE_CONFIG_DIR` pointed at claude-p and the plugin is on in claude-p only:
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\.claude-p\config"
+claude plugin marketplace add morluto/rea
+claude plugin install rea@rea
+Remove-Item Env:CLAUDE_CONFIG_DIR
+```
+
+Notes for [rea](https://github.com/morluto/rea) (MCP server + `reverse-engineer-anything` skill):
+
+- Needs Node `^22.23.4 || ^24.22.1 || >=26.12.1`. With nvm-windows, switch with `nvm install` / `nvm use`; don't run the Node MSI, which writes into nvm's active version folder.
+- Don't use `npx rea-agents setup` for Claude. It registers rea in `~\.claude.json` and copies the skill into `~\.claude\skills`, which claude-p shares, so rea would also appear in your main `claude`.
+- For the CLI from any folder: `npm install --global rea-agents`. Native analysis engines are found through user env vars: `GHIDRA_INSTALL_DIR` (Ghidra 12.1.x), `JAVA_HOME` (JDK 21+), `REA_JADX_MCP_JAR`, `REA_APKTOOL_COMMAND`, `REA_RIZIN_COMMAND`, `REA_ADB_PATH`. Check with `rea doctor --json`. The `registration:*` drift entries are expected when you skip `rea setup`.
+- rea advertises about 255 tools (~80k tokens of schemas). Claude Code defers MCP tools behind `ToolSearch` through the router, so they aren't sent with every request. If a model handles that badly, set `REA_MCP_TOOL_CATALOG_PROFILE=hot-cold` before launching claude-p: rea then starts with 5 tools and loads the rest on demand.
+
 ## Using a cloud GPU as "local"
 
 Run llama-server on a rented GPU (Vast.ai, RunPod, ...) and either tunnel it:
